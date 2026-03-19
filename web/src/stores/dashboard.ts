@@ -9,6 +9,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
   const recentSessions = ref<Session[]>([])
   const topSessions = ref<Session[]>([])
   const loaded = ref(false)
+  const lastUpdated = ref<Date | null>(null)
 
   async function load() {
     const [s, d, recent, top] = await Promise.all([
@@ -22,6 +23,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
     recentSessions.value = recent || []
     topSessions.value = top.sessions || []
     loaded.value = true
+    lastUpdated.value = new Date()
   }
 
   function applyEvent(event: WsEvent) {
@@ -32,6 +34,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
             ...summary.value,
             ...event.payload,
           } as Summary
+          lastUpdated.value = new Date()
         }
         break
 
@@ -64,5 +67,5 @@ export const useDashboardStore = defineStore('dashboard', () => {
     }
   }
 
-  return { summary, daily, recentSessions, topSessions, loaded, load, applyEvent }
+  return { summary, daily, recentSessions, topSessions, loaded, lastUpdated, load, applyEvent }
 })

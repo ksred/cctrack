@@ -2,7 +2,9 @@
   <div>
     <div class="page-header">
       <h1 class="page-title">Overview</h1>
-      <div class="page-date">{{ currentDate }}</div>
+      <div class="page-date">
+        {{ currentDate }}<span v-if="lastUpdated"> — {{ lastUpdated }}</span>
+      </div>
     </div>
 
     <div class="stat-grid" v-if="store.summary">
@@ -140,6 +142,22 @@ const currentDate = computed(() => {
   return d.toLocaleDateString('en-GB', {
     weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
   })
+})
+
+const lastUpdated = computed(() => {
+  const ts = store.lastUpdated
+  if (!ts) return null
+  const time = ts.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+  // Extract timezone abbreviation from Date.toString(), e.g. "(AEST)" or "(Australian Eastern Daylight Time)"
+  const tzMatch = ts.toString().match(/\((.+)\)/)
+  let tz = ''
+  if (tzMatch) {
+    const tzName = tzMatch[1]
+    tz = tzName.includes(' ')
+      ? tzName.split(' ').map(w => w[0]).join('')
+      : tzName
+  }
+  return `Last updated: ${time}${tz ? ' ' + tz : ''}`
 })
 
 function trendPct(current: number, previous: number): number | null {

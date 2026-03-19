@@ -1,10 +1,20 @@
 package store
 
 import (
+	"sort"
 	"time"
 
 	"github.com/ksred/cctrack/internal/calculator"
 )
+
+func sortProjectMonthly(data []ProjectMonthly) {
+	sort.Slice(data, func(i, j int) bool {
+		if data[i].Month != data[j].Month {
+			return data[i].Month < data[j].Month
+		}
+		return data[i].Cost > data[j].Cost
+	})
+}
 
 type Summary struct {
 	Today     SpendBucket `json:"today"`
@@ -25,17 +35,19 @@ type DailySpend struct {
 
 func (s *Store) GetSummary() (*Summary, error) {
 	now := time.Now()
-	todayStr := now.Format("2006-01-02")
-	weekAgo := now.AddDate(0, 0, -7).Format("2006-01-02")
-	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
+	todayStart := startOfDay(now).Format(time.RFC3339)
+	tomorrowStart := startOfDay(now).AddDate(0, 0, 1).Format(time.RFC3339)
+	weekAgo := startOfDay(now).AddDate(0, 0, -7).Format(time.RFC3339)
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Format(time.RFC3339)
 
 	summary := &Summary{}
 
-	// Today
+	// Today: sessions active between local midnight and local tomorrow midnight
 	err := s.db.QueryRow(`
 		SELECT COALESCE(SUM(total_cost), 0),
 		       COALESCE(SUM(total_input + total_output + total_cache_read + total_cache_write), 0)
-		FROM sessions WHERE last_activity >= ?`, todayStr).Scan(&summary.Today.Cost, &summary.Today.Tokens)
+		FROM sessions WHERE last_activity >= ? AND last_activity < ?`,
+		todayStart, tomorrowStart).Scan(&summary.Today.Cost, &summary.Today.Tokens)
 	if err != nil {
 		return nil, err
 	}
@@ -69,38 +81,39 @@ func (s *Store) GetSummary() (*Summary, error) {
 }
 
 func (s *Store) GetDailySummary(days int) ([]DailySpend, error) {
-	since := time.Now().AddDate(0, 0, -days).Format("2006-01-02")
+	now := time.Now()
+	since := startOfDay(now).AddDate(0, 0, -days).Format(time.RFC3339)
 
+	// Query raw timestamps and costs — no SQLite date functions
 	rows, err := s.db.Query(`
-		SELECT DATE(last_activity) as day, SUM(total_cost)
+		SELECT last_activity, total_cost
 		FROM sessions
-		WHERE last_activity >= ?
-		GROUP BY day
-		ORDER BY day ASC`, since)
+		WHERE last_activity >= ?`, since)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	// Build a complete date range with zero-filled gaps
+	// Bucket costs by local date in Go
 	result := make(map[string]float64)
 	for rows.Next() {
-		var day string
+		var ts string
 		var cost float64
-		if err := rows.Scan(&day, &cost); err != nil {
+		if err := rows.Scan(&ts, &cost); err != nil {
 			return nil, err
 		}
-		result[day] = cost
+		localDate := parseLocalTime(ts).Format("2006-01-02")
+		result[localDate] += cost
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
+	// Build a complete date range with zero-filled gaps
 	var daily []DailySpend
 	for i := days; i >= 0; i-- {
-		d := time.Now().AddDate(0, 0, -i).Format("2006-01-02")
-		cost := result[d]
-		daily = append(daily, DailySpend{Date: d, Cost: cost})
+		d := now.AddDate(0, 0, -i).Format("2006-01-02")
+		daily = append(daily, DailySpend{Date: d, Cost: result[d]})
 	}
 	return daily, nil
 }
@@ -211,30 +224,41 @@ func (s *Store) GetProjects() ([]ProjectSummary, error) {
 }
 
 func (s *Store) GetProjectMonthly() ([]ProjectMonthly, error) {
+	sixMonthsAgo := time.Now().AddDate(0, -6, 0).Format(time.RFC3339)
+
+	// Query raw timestamps — bucket by month in Go
 	rows, err := s.db.Query(`
-		SELECT project,
-			STRFTIME('%Y-%m', last_activity) as month,
-			SUM(total_cost) as cost
+		SELECT project, last_activity, total_cost
 		FROM sessions
-		WHERE last_activity >= DATE('now', '-6 months')
-		GROUP BY project, month
-		ORDER BY month ASC, cost DESC`)
+		WHERE last_activity >= ?`, sixMonthsAgo)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var data []ProjectMonthly
+	// Aggregate by project + local month
+	type key struct{ project, month string }
+	agg := make(map[key]float64)
 	for rows.Next() {
-		var pm ProjectMonthly
-		if err := rows.Scan(&pm.Project, &pm.Month, &pm.Cost); err != nil {
+		var project, ts string
+		var cost float64
+		if err := rows.Scan(&project, &ts, &cost); err != nil {
 			return nil, err
 		}
-		data = append(data, pm)
+		month := parseLocalTime(ts).Format("2006-01")
+		agg[key{project, month}] += cost
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+
+	// Flatten and sort
+	var data []ProjectMonthly
+	for k, cost := range agg {
+		data = append(data, ProjectMonthly{Project: k.project, Month: k.month, Cost: cost})
+	}
+	// Sort by month ASC, then cost DESC
+	sortProjectMonthly(data)
 	return data, nil
 }
 
@@ -338,30 +362,46 @@ type HeatmapCell struct {
 }
 
 func (s *Store) GetActivityHeatmap() ([]HeatmapCell, error) {
+	// Query raw timestamps — bucket by day-of-week and hour in Go using local time
 	rows, err := s.db.Query(`
-		SELECT CAST(STRFTIME('%w', last_activity) AS INTEGER) as dow,
-			CAST(STRFTIME('%H', last_activity, 'localtime') AS INTEGER) as hour,
-			SUM(total_cost) as cost
+		SELECT last_activity, total_cost
 		FROM sessions
-		WHERE last_activity != ''
-		GROUP BY dow, hour
-		ORDER BY dow, hour`)
+		WHERE last_activity != ''`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var cells []HeatmapCell
+	type cellKey struct{ day, hour int }
+	agg := make(map[cellKey]float64)
 	for rows.Next() {
-		var c HeatmapCell
-		if err := rows.Scan(&c.Day, &c.Hour, &c.Cost); err != nil {
+		var ts string
+		var cost float64
+		if err := rows.Scan(&ts, &cost); err != nil {
 			return nil, err
 		}
-		cells = append(cells, c)
+		t := parseLocalTime(ts)
+		if t.IsZero() {
+			continue
+		}
+		k := cellKey{day: int(t.Weekday()), hour: t.Hour()}
+		agg[k] += cost
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+
+	var cells []HeatmapCell
+	for k, cost := range agg {
+		cells = append(cells, HeatmapCell{Day: k.day, Hour: k.hour, Cost: cost})
+	}
+	// Sort by day, then hour for consistent output
+	sort.Slice(cells, func(i, j int) bool {
+		if cells[i].Day != cells[j].Day {
+			return cells[i].Day < cells[j].Day
+		}
+		return cells[i].Hour < cells[j].Hour
+	})
 	return cells, nil
 }
 
@@ -375,22 +415,22 @@ type Trends struct {
 
 func (s *Store) GetTrends() (*Trends, error) {
 	now := time.Now()
-	todayStr := now.Format("2006-01-02")
-	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
+	todayStart := startOfDay(now).Format(time.RFC3339)
+	yesterdayStart := startOfDay(now).AddDate(0, 0, -1).Format(time.RFC3339)
 
-	twoWeeksAgo := now.AddDate(0, 0, -14).Format("2006-01-02")
-	oneWeekAgo := now.AddDate(0, 0, -7).Format("2006-01-02")
+	twoWeeksAgo := startOfDay(now).AddDate(0, 0, -14).Format(time.RFC3339)
+	oneWeekAgo := startOfDay(now).AddDate(0, 0, -7).Format(time.RFC3339)
 
-	prevMonthStart := time.Date(now.Year(), now.Month()-1, 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
-	prevMonthEnd := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
+	prevMonthStart := time.Date(now.Year(), now.Month()-1, 1, 0, 0, 0, 0, now.Location()).Format(time.RFC3339)
+	prevMonthEnd := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Format(time.RFC3339)
 
 	t := &Trends{}
 
-	// Previous day cost (yesterday)
+	// Previous day cost (yesterday midnight to today midnight, local time)
 	s.db.QueryRow(`
 		SELECT COALESCE(SUM(total_cost), 0)
-		FROM sessions WHERE DATE(last_activity) >= ? AND DATE(last_activity) < ?`,
-		yesterday, todayStr).Scan(&t.PrevDayCost)
+		FROM sessions WHERE last_activity >= ? AND last_activity < ?`,
+		yesterdayStart, todayStart).Scan(&t.PrevDayCost)
 
 	// Previous week cost (7-14 days ago)
 	s.db.QueryRow(`
