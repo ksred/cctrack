@@ -50,12 +50,12 @@ func Load() (*Config, error) {
 }
 
 func (c *Config) Save() error {
-	if err := os.MkdirAll(ConfigDir(), 0755); err != nil {
+	if err := os.MkdirAll(ConfigDir(), 0700); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(ConfigPath(), data, 0644)
+	return os.WriteFile(ConfigPath(), data, 0600)
 }

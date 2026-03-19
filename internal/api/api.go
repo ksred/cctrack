@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/coder/websocket"
 	"github.com/ksred/cctrack/internal/calculator"
@@ -44,25 +47,25 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 func (a *API) handleSummary(w http.ResponseWriter, r *http.Request) {
 	summary, err := a.store.GetSummary()
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		internalError(w, "summary", err)
 		return
 	}
 
 	input, output, cacheRead, cacheWrite, err := a.store.GetTokenBreakdown()
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		internalError(w, "token-breakdown", err)
 		return
 	}
 
 	costBreakdown, err := a.store.GetCostBreakdown()
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		internalError(w, "cost-breakdown", err)
 		return
 	}
 
 	trends, err := a.store.GetTrends()
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		internalError(w, "trends", err)
 		return
 	}
 
@@ -98,7 +101,7 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 
 	sessions, total, err := a.store.ListSessions(limit, offset, sort, dir)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		internalError(w, "sessions", err)
 		return
 	}
 
@@ -124,7 +127,7 @@ func (a *API) handleRecent(w http.ResponseWriter, r *http.Request) {
 	n := queryInt(r, "n", 10)
 	sessions, err := a.store.RecentSessions(n)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		internalError(w, "recent", err)
 		return
 	}
 	writeJSON(w, sessions)
@@ -134,7 +137,7 @@ func (a *API) handleDaily(w http.ResponseWriter, r *http.Request) {
 	days := queryInt(r, "days", 30)
 	daily, err := a.store.GetDailySummary(days)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		internalError(w, "daily", err)
 		return
 	}
 	writeJSON(w, daily)
@@ -162,11 +165,15 @@ func (a *API) handlePostSettings(w http.ResponseWriter, r *http.Request) {
 		a.cfg.OpenBrowserOnServe = *updates.OpenBrowserOnServe
 	}
 	if updates.LogDir != nil {
+		if err := validateLogDir(*updates.LogDir); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
 		a.cfg.LogDir = *updates.LogDir
 	}
 
 	if err := a.cfg.Save(); err != nil {
-		http.Error(w, err.Error(), 500)
+		internalError(w, "save-settings", err)
 		return
 	}
 	writeJSON(w, a.cfg)
@@ -175,7 +182,7 @@ func (a *API) handlePostSettings(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleProjects(w http.ResponseWriter, r *http.Request) {
 	projects, err := a.store.GetProjects()
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		internalError(w, "projects", err)
 		return
 	}
 	writeJSON(w, projects)
@@ -184,7 +191,7 @@ func (a *API) handleProjects(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleProjectMonthly(w http.ResponseWriter, r *http.Request) {
 	data, err := a.store.GetProjectMonthly()
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		internalError(w, "project-monthly", err)
 		return
 	}
 	writeJSON(w, data)
@@ -197,7 +204,7 @@ func (a *API) handleRates(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleModels(w http.ResponseWriter, r *http.Request) {
 	models, err := a.store.GetModelBreakdown()
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		internalError(w, "models", err)
 		return
 	}
 	writeJSON(w, models)
@@ -206,7 +213,7 @@ func (a *API) handleModels(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleHeatmap(w http.ResponseWriter, r *http.Request) {
 	cells, err := a.store.GetActivityHeatmap()
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		internalError(w, "heatmap", err)
 		return
 	}
 	writeJSON(w, cells)
@@ -216,7 +223,7 @@ func (a *API) handleSessionRequests(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	requests, err := a.store.GetSessionRequests(id)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		internalError(w, "session-requests", err)
 		return
 	}
 	writeJSON(w, requests)
@@ -261,4 +268,51 @@ func queryInt(r *http.Request, key string, def int) int {
 		return def
 	}
 	return n
+}
+
+// internalError logs the real error and returns a generic 500 to the client.
+func internalError(w http.ResponseWriter, context string, err error) {
+	log.Printf("API error [%s]: %v", context, err)
+	http.Error(w, "internal server error", http.StatusInternalServerError)
+}
+
+// validateLogDir checks that the given path is a safe, existing directory
+// within the user's home directory tree.
+func validateLogDir(dir string) error {
+	// Expand ~ prefix
+	if strings.HasPrefix(dir, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("cannot resolve home directory")
+		}
+		dir = filepath.Join(home, dir[2:])
+	}
+
+	// Must be absolute after expansion
+	if !filepath.IsAbs(dir) {
+		return fmt.Errorf("log_dir must be an absolute path")
+	}
+
+	// Clean the path and reject traversal
+	cleaned := filepath.Clean(dir)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("cannot resolve home directory")
+	}
+
+	// Must be within home directory
+	if !strings.HasPrefix(cleaned, home+string(filepath.Separator)) && cleaned != home {
+		return fmt.Errorf("log_dir must be within your home directory")
+	}
+
+	// Check the directory exists
+	info, err := os.Stat(cleaned)
+	if err != nil {
+		return fmt.Errorf("log_dir path does not exist or is not accessible")
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("log_dir path is not a directory")
+	}
+
+	return nil
 }

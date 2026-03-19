@@ -14,7 +14,7 @@ type Store struct {
 }
 
 func Open(dbPath string) (*Store, error) {
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0700); err != nil {
 		return nil, fmt.Errorf("creating db directory: %w", err)
 	}
 
