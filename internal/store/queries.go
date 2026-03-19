@@ -92,6 +92,9 @@ func (s *Store) GetDailySummary(days int) ([]DailySpend, error) {
 		}
 		result[day] = cost
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 
 	var daily []DailySpend
 	for i := days; i >= 0; i-- {
@@ -122,6 +125,9 @@ func (s *Store) TopSessions(n int) ([]Session, error) {
 		}
 		sessions = append(sessions, sess)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return sessions, nil
 }
 
@@ -144,6 +150,9 @@ func (s *Store) RecentSessions(n int) ([]Session, error) {
 			return nil, err
 		}
 		sessions = append(sessions, sess)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return sessions, nil
 }
@@ -195,6 +204,9 @@ func (s *Store) GetProjects() ([]ProjectSummary, error) {
 		}
 		projects = append(projects, p)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return projects, nil
 }
 
@@ -219,6 +231,9 @@ func (s *Store) GetProjectMonthly() ([]ProjectMonthly, error) {
 			return nil, err
 		}
 		data = append(data, pm)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return data, nil
 }
@@ -267,6 +282,9 @@ func (s *Store) GetCostBreakdown() (*CostByType, error) {
 		result.CacheReadCost += cb.CacheReadCost
 		result.CacheWriteCost += cb.CacheWriteCost
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 
@@ -305,6 +323,9 @@ func (s *Store) GetModelBreakdown() ([]ModelSummary, error) {
 		m.Family = rates.Family
 		results = append(results, m)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return results, nil
 }
 
@@ -337,6 +358,9 @@ func (s *Store) GetActivityHeatmap() ([]HeatmapCell, error) {
 			return nil, err
 		}
 		cells = append(cells, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return cells, nil
 }

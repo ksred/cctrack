@@ -122,6 +122,9 @@ func (s *Store) GetSessionRequests(sessionID string) ([]RequestRecord, error) {
 		}
 		recs = append(recs, r)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return recs, nil
 }
 
@@ -170,6 +173,9 @@ func (s *Store) ListSessions(limit, offset int, sortBy, sortDir string) ([]Sessi
 			return nil, 0, err
 		}
 		sessions = append(sessions, sess)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
 	}
 	return sessions, total, nil
 }

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -153,7 +154,8 @@ func (a *API) handlePostSettings(w http.ResponseWriter, r *http.Request) {
 		OpenBrowserOnServe *bool    `json:"open_browser_on_serve"`
 		LogDir             *string  `json:"log_dir"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
+	// Limit request body to 1 MB to prevent OOM from oversized payloads
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&updates); err != nil {
 		http.Error(w, "invalid JSON", 400)
 		return
 	}

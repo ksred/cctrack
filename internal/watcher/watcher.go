@@ -1,6 +1,7 @@
 package watcher
 
 import (
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -45,11 +46,15 @@ func New(logDir string, debounce time.Duration, cb Callback) (*Watcher, error) {
 }
 
 func (w *Watcher) addDirs(root string) error {
-	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
-		if info.IsDir() {
+		// Skip symlinks to avoid watching unintended directories
+		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		if d.IsDir() {
 			if err := w.watcher.Add(path); err != nil {
 				log.Printf("Warning: cannot watch %s: %v", path, err)
 			}
@@ -102,7 +107,8 @@ func (w *Watcher) loop() {
 			if !strings.HasSuffix(event.Name, ".jsonl") {
 				// If a new directory is created, start watching it
 				if event.Op&fsnotify.Create != 0 {
-					if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
+					// Use Lstat to avoid following symlinks
+					if info, err := os.Lstat(event.Name); err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
 						w.watcher.Add(event.Name)
 					}
 				}

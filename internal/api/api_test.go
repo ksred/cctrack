@@ -270,3 +270,35 @@ func TestSummaryEndpoint_ReturnsGenericErrorOnFailure(t *testing.T) {
 		t.Errorf("expected generic error, got %q", body)
 	}
 }
+
+// --- P2: Body size limit tests ---
+
+func TestPostSettings_RejectsOversizedBody(t *testing.T) {
+	_, mux, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	huge := `{"monthly_budget_usd":` + strings.Repeat("1", 1<<20) + `}`
+	req := httptest.NewRequest("POST", "/api/v1/settings", strings.NewReader(huge))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for oversized body, got %d", rec.Code)
+	}
+}
+
+func TestPostSettings_AcceptsNormalBody(t *testing.T) {
+	_, mux, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	body := strings.NewReader(`{"monthly_budget_usd": 50.0}`)
+	req := httptest.NewRequest("POST", "/api/v1/settings", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 for normal body, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}

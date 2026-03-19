@@ -136,6 +136,13 @@ func (p *Parser) ParseFile(path string) ([]string, error) {
 	var requestRecords []store.RequestRecord
 
 	processEvent := func(event RawEvent, requestID string) {
+		// Skip events with negative token counts (malformed/malicious data)
+		u := event.Message.Usage
+		if u.InputTokens < 0 || u.OutputTokens < 0 ||
+			u.CacheReadInputTokens < 0 || u.CacheCreationInputTokens < 0 {
+			return
+		}
+
 		sid := event.SessionID
 		if sid == "" {
 			sid = info.SessionID
@@ -160,7 +167,6 @@ func (p *Parser) ParseFile(path string) ([]string, error) {
 			agg.timestamp = event.Timestamp
 		}
 
-		u := event.Message.Usage
 		agg.input += u.InputTokens
 		agg.output += u.OutputTokens
 		agg.cacheRead += u.CacheReadInputTokens

@@ -1,19 +1,25 @@
 package parser
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
 // DiscoverFiles walks the log directory and returns all .jsonl files.
+// Symlinks are skipped to prevent reading unintended files.
 func DiscoverFiles(logDir string) ([]string, error) {
 	var files []string
-	err := filepath.Walk(logDir, func(path string, info os.FileInfo, err error) error {
+	err := filepath.WalkDir(logDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip inaccessible dirs
 		}
-		if !info.IsDir() && strings.HasSuffix(path, ".jsonl") {
+		// Skip symlinks to prevent reading unintended files
+		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		if !d.IsDir() && strings.HasSuffix(path, ".jsonl") {
 			files = append(files, path)
 		}
 		return nil
@@ -23,8 +29,9 @@ func DiscoverFiles(logDir string) ([]string, error) {
 
 // ExtractSessionInfo derives session ID and project name from a JSONL file path.
 // Paths look like:
-//   ~/.claude/projects/-home-user-Github-project/SESSION_UUID.jsonl
-//   ~/.claude/projects/-home-user-Github-project/SESSION_UUID/subagents/agent-XXXX.jsonl
+//
+//	~/.claude/projects/-home-user-Github-project/SESSION_UUID.jsonl
+//	~/.claude/projects/-home-user-Github-project/SESSION_UUID/subagents/agent-XXXX.jsonl
 func ExtractSessionInfo(path string) SessionInfo {
 	info := SessionInfo{}
 
