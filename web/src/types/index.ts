@@ -54,7 +54,9 @@ export interface RequestRecord {
   input_tokens: number
   output_tokens: number
   cache_read_tokens: number
-  cache_write_tokens: number
+  cache_write_5m_tokens: number
+  cache_write_1h_tokens: number
+  cache_write_tokens: number // derived: 5m + 1h
   cost: number
 }
 
@@ -68,7 +70,9 @@ export interface Session {
   total_input: number
   total_output: number
   total_cache_read: number
-  total_cache_write: number
+  total_cache_write_5m: number
+  total_cache_write_1h: number
+  total_cache_write: number // derived: 5m + 1h
   total_cost: number
 }
 
@@ -94,10 +98,18 @@ export interface Settings {
 
 export interface ModelRate {
   Family: string
+  Released: string
   InputPerMToken: number
   OutputPerMToken: number
   CacheReadPerMToken: number
-  CacheWritePerMToken: number
+  CacheWrite5mPerMToken: number
+  CacheWrite1hPerMToken: number
+}
+
+export interface RatesResponse {
+  version: string
+  updated: string
+  rates: ModelRate[]
 }
 
 export interface ProjectSummary {

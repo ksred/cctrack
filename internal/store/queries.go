@@ -34,7 +34,7 @@ func (s *Store) GetSummary() (*Summary, error) {
 	// Today
 	err := s.db.QueryRow(`
 		SELECT COALESCE(SUM(total_cost), 0),
-		       COALESCE(SUM(total_input + total_output + total_cache_read + total_cache_write), 0)
+		       COALESCE(SUM(total_input + total_output + total_cache_read + total_cache_write_5m + total_cache_write_1h), 0)
 		FROM sessions WHERE last_activity >= ?`, todayStr).Scan(&summary.Today.Cost, &summary.Today.Tokens)
 	if err != nil {
 		return nil, err
@@ -43,7 +43,7 @@ func (s *Store) GetSummary() (*Summary, error) {
 	// This week
 	err = s.db.QueryRow(`
 		SELECT COALESCE(SUM(total_cost), 0),
-		       COALESCE(SUM(total_input + total_output + total_cache_read + total_cache_write), 0)
+		       COALESCE(SUM(total_input + total_output + total_cache_read + total_cache_write_5m + total_cache_write_1h), 0)
 		FROM sessions WHERE last_activity >= ?`, weekAgo).Scan(&summary.Week.Cost, &summary.Week.Tokens)
 	if err != nil {
 		return nil, err
@@ -52,7 +52,7 @@ func (s *Store) GetSummary() (*Summary, error) {
 	// This month
 	err = s.db.QueryRow(`
 		SELECT COALESCE(SUM(total_cost), 0),
-		       COALESCE(SUM(total_input + total_output + total_cache_read + total_cache_write), 0)
+		       COALESCE(SUM(total_input + total_output + total_cache_read + total_cache_write_5m + total_cache_write_1h), 0)
 		FROM sessions WHERE last_activity >= ?`, monthStart).Scan(&summary.Month.Cost, &summary.Month.Tokens)
 	if err != nil {
 		return nil, err
@@ -104,7 +104,8 @@ func (s *Store) GetDailySummary(days int) ([]DailySpend, error) {
 
 func (s *Store) TopSessions(n int) ([]Session, error) {
 	rows, err := s.db.Query(`SELECT id, project, slug, model, started_at, last_activity,
-		total_input, total_output, total_cache_read, total_cache_write, total_cost
+		total_input, total_output, total_cache_read,
+		total_cache_write_5m, total_cache_write_1h, total_cost
 		FROM sessions ORDER BY total_cost DESC LIMIT ?`, n)
 	if err != nil {
 		return nil, err
@@ -116,10 +117,12 @@ func (s *Store) TopSessions(n int) ([]Session, error) {
 		var sess Session
 		if err := rows.Scan(&sess.ID, &sess.Project, &sess.Slug, &sess.Model,
 			&sess.StartedAt, &sess.LastActivity,
-			&sess.TotalInput, &sess.TotalOutput, &sess.TotalCacheRead, &sess.TotalCacheWrite,
+			&sess.TotalInput, &sess.TotalOutput, &sess.TotalCacheRead,
+			&sess.TotalCacheWrite5m, &sess.TotalCacheWrite1h,
 			&sess.TotalCost); err != nil {
 			return nil, err
 		}
+		sess.TotalCacheWrite = sess.TotalCacheWrite5m + sess.TotalCacheWrite1h
 		sessions = append(sessions, sess)
 	}
 	return sessions, nil
@@ -127,7 +130,8 @@ func (s *Store) TopSessions(n int) ([]Session, error) {
 
 func (s *Store) RecentSessions(n int) ([]Session, error) {
 	rows, err := s.db.Query(`SELECT id, project, slug, model, started_at, last_activity,
-		total_input, total_output, total_cache_read, total_cache_write, total_cost
+		total_input, total_output, total_cache_read,
+		total_cache_write_5m, total_cache_write_1h, total_cost
 		FROM sessions ORDER BY last_activity DESC LIMIT ?`, n)
 	if err != nil {
 		return nil, err
@@ -139,10 +143,12 @@ func (s *Store) RecentSessions(n int) ([]Session, error) {
 		var sess Session
 		if err := rows.Scan(&sess.ID, &sess.Project, &sess.Slug, &sess.Model,
 			&sess.StartedAt, &sess.LastActivity,
-			&sess.TotalInput, &sess.TotalOutput, &sess.TotalCacheRead, &sess.TotalCacheWrite,
+			&sess.TotalInput, &sess.TotalOutput, &sess.TotalCacheRead,
+			&sess.TotalCacheWrite5m, &sess.TotalCacheWrite1h,
 			&sess.TotalCost); err != nil {
 			return nil, err
 		}
+		sess.TotalCacheWrite = sess.TotalCacheWrite5m + sess.TotalCacheWrite1h
 		sessions = append(sessions, sess)
 	}
 	return sessions, nil
@@ -171,11 +177,11 @@ func (s *Store) GetProjects() ([]ProjectSummary, error) {
 		SELECT project,
 			COUNT(*) as session_count,
 			SUM(total_cost) as total_cost,
-			SUM(total_input + total_output + total_cache_read + total_cache_write) as total_tokens,
+			SUM(total_input + total_output + total_cache_read + total_cache_write_5m + total_cache_write_1h) as total_tokens,
 			SUM(total_input) as total_input,
 			SUM(total_output) as total_output,
 			SUM(total_cache_read) as total_cache_read,
-			SUM(total_cache_write) as total_cache_write,
+			SUM(total_cache_write_5m + total_cache_write_1h) as total_cache_write,
 			MAX(last_activity) as last_activity
 		FROM sessions
 		GROUP BY project
@@ -228,7 +234,7 @@ func (s *Store) GetTokenBreakdown() (input, output, cacheRead, cacheWrite int64,
 		SELECT COALESCE(SUM(total_input), 0),
 		       COALESCE(SUM(total_output), 0),
 		       COALESCE(SUM(total_cache_read), 0),
-		       COALESCE(SUM(total_cache_write), 0)
+		       COALESCE(SUM(total_cache_write_5m + total_cache_write_1h), 0)
 		FROM sessions`).Scan(&input, &output, &cacheRead, &cacheWrite)
 	return
 }
@@ -242,7 +248,8 @@ type CostByType struct {
 
 func (s *Store) GetCostBreakdown() (*CostByType, error) {
 	rows, err := s.db.Query(`
-		SELECT model, total_input, total_output, total_cache_read, total_cache_write
+		SELECT model, total_input, total_output, total_cache_read,
+			total_cache_write_5m, total_cache_write_1h
 		FROM sessions`)
 	if err != nil {
 		return nil, err
@@ -252,15 +259,16 @@ func (s *Store) GetCostBreakdown() (*CostByType, error) {
 	result := &CostByType{}
 	for rows.Next() {
 		var model string
-		var inp, out, cr, cw int64
-		if err := rows.Scan(&model, &inp, &out, &cr, &cw); err != nil {
+		var inp, out, cr, cw5m, cw1h int64
+		if err := rows.Scan(&model, &inp, &out, &cr, &cw5m, &cw1h); err != nil {
 			return nil, err
 		}
 		cb := calculator.Calculate(model, calculator.TokenUsage{
-			InputTokens:      inp,
-			OutputTokens:     out,
-			CacheReadTokens:  cr,
-			CacheWriteTokens: cw,
+			InputTokens:        inp,
+			OutputTokens:       out,
+			CacheReadTokens:    cr,
+			CacheWrite5mTokens: cw5m,
+			CacheWrite1hTokens: cw1h,
 		})
 		result.InputCost += cb.InputCost
 		result.OutputCost += cb.OutputCost
@@ -285,7 +293,7 @@ func (s *Store) GetModelBreakdown() ([]ModelSummary, error) {
 		SELECT model,
 			COUNT(*) as session_count,
 			SUM(total_cost) as total_cost,
-			SUM(total_input + total_output + total_cache_read + total_cache_write) as total_tokens
+			SUM(total_input + total_output + total_cache_read + total_cache_write_5m + total_cache_write_1h) as total_tokens
 		FROM sessions
 		WHERE model != ''
 		GROUP BY model

@@ -190,7 +190,11 @@ func (a *API) handleProjectMonthly(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleRates(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, calculator.Rates)
+	writeJSON(w, map[string]any{
+		"version": calculator.RatesVersion,
+		"updated": calculator.RatesUpdated,
+		"rates":   calculator.Rates,
+	})
 }
 
 func (a *API) handleModels(w http.ResponseWriter, r *http.Request) {

@@ -46,8 +46,9 @@ func (s *Store) migrate() error {
 			last_activity TEXT NOT NULL DEFAULT '',
 			total_input   INTEGER NOT NULL DEFAULT 0,
 			total_output  INTEGER NOT NULL DEFAULT 0,
-			total_cache_read  INTEGER NOT NULL DEFAULT 0,
-			total_cache_write INTEGER NOT NULL DEFAULT 0,
+			total_cache_read     INTEGER NOT NULL DEFAULT 0,
+			total_cache_write_5m INTEGER NOT NULL DEFAULT 0,
+			total_cache_write_1h INTEGER NOT NULL DEFAULT 0,
 			total_cost    REAL NOT NULL DEFAULT 0
 		);
 
@@ -62,10 +63,11 @@ func (s *Store) migrate() error {
 			session_id TEXT NOT NULL,
 			timestamp  TEXT NOT NULL DEFAULT '',
 			model      TEXT NOT NULL DEFAULT '',
-			input_tokens      INTEGER NOT NULL DEFAULT 0,
-			output_tokens     INTEGER NOT NULL DEFAULT 0,
-			cache_read_tokens INTEGER NOT NULL DEFAULT 0,
-			cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+			input_tokens         INTEGER NOT NULL DEFAULT 0,
+			output_tokens        INTEGER NOT NULL DEFAULT 0,
+			cache_read_tokens    INTEGER NOT NULL DEFAULT 0,
+			cache_write_5m_tokens INTEGER NOT NULL DEFAULT 0,
+			cache_write_1h_tokens INTEGER NOT NULL DEFAULT 0,
 			cost       REAL NOT NULL DEFAULT 0,
 			FOREIGN KEY (session_id) REFERENCES sessions(id)
 		);

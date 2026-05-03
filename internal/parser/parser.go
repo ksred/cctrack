@@ -121,14 +121,15 @@ func (p *Parser) ParseFile(path string) ([]string, error) {
 
 	// Aggregate token usage per session
 	type sessionAgg struct {
-		model     string
-		slug      string
-		sessionID string
-		timestamp string
-		input     int64
-		output    int64
-		cacheRead int64
-		cacheWrite int64
+		model        string
+		slug         string
+		sessionID    string
+		timestamp    string
+		input        int64
+		output       int64
+		cacheRead    int64
+		cacheWrite5m int64
+		cacheWrite1h int64
 	}
 	sessions := make(map[string]*sessionAgg)
 
@@ -161,30 +162,43 @@ func (p *Parser) ParseFile(path string) ([]string, error) {
 		}
 
 		u := event.Message.Usage
+		// Split cache-creation tokens by TTL when the breakdown is present;
+		// fall back to all-5m when the breakdown is absent (older log lines).
+		var cw5m, cw1h int64
+		if u.CacheCreation != nil {
+			cw5m = u.CacheCreation.Ephemeral5m
+			cw1h = u.CacheCreation.Ephemeral1h
+		} else {
+			cw5m = u.CacheCreationInputTokens
+		}
+
 		agg.input += u.InputTokens
 		agg.output += u.OutputTokens
 		agg.cacheRead += u.CacheReadInputTokens
-		agg.cacheWrite += u.CacheCreationInputTokens
+		agg.cacheWrite5m += cw5m
+		agg.cacheWrite1h += cw1h
 
 		// Store per-request record if we have a requestID
 		if requestID != "" {
 			usage := calculator.TokenUsage{
-				InputTokens:      u.InputTokens,
-				OutputTokens:     u.OutputTokens,
-				CacheReadTokens:  u.CacheReadInputTokens,
-				CacheWriteTokens: u.CacheCreationInputTokens,
+				InputTokens:        u.InputTokens,
+				OutputTokens:       u.OutputTokens,
+				CacheReadTokens:    u.CacheReadInputTokens,
+				CacheWrite5mTokens: cw5m,
+				CacheWrite1hTokens: cw1h,
 			}
 			cost := calculator.Calculate(event.Message.Model, usage)
 			requestRecords = append(requestRecords, store.RequestRecord{
-				RequestID:        requestID,
-				SessionID:        sid,
-				Timestamp:        event.Timestamp,
-				Model:            event.Message.Model,
-				InputTokens:      u.InputTokens,
-				OutputTokens:     u.OutputTokens,
-				CacheReadTokens:  u.CacheReadInputTokens,
-				CacheWriteTokens: u.CacheCreationInputTokens,
-				Cost:             cost.TotalCost,
+				RequestID:          requestID,
+				SessionID:          sid,
+				Timestamp:          event.Timestamp,
+				Model:              event.Message.Model,
+				InputTokens:        u.InputTokens,
+				OutputTokens:       u.OutputTokens,
+				CacheReadTokens:    u.CacheReadInputTokens,
+				CacheWrite5mTokens: cw5m,
+				CacheWrite1hTokens: cw1h,
+				Cost:               cost.TotalCost,
 			})
 		}
 	}
@@ -200,25 +214,27 @@ func (p *Parser) ParseFile(path string) ([]string, error) {
 	var affectedIDs []string
 	for sid, agg := range sessions {
 		usage := calculator.TokenUsage{
-			InputTokens:      agg.input,
-			OutputTokens:     agg.output,
-			CacheReadTokens:  agg.cacheRead,
-			CacheWriteTokens: agg.cacheWrite,
+			InputTokens:        agg.input,
+			OutputTokens:       agg.output,
+			CacheReadTokens:    agg.cacheRead,
+			CacheWrite5mTokens: agg.cacheWrite5m,
+			CacheWrite1hTokens: agg.cacheWrite1h,
 		}
 		cost := calculator.Calculate(agg.model, usage)
 
 		project := info.Project
 		delta := store.SessionDelta{
-			ID:              sid,
-			Project:         project,
-			Slug:            agg.slug,
-			Model:           agg.model,
-			Timestamp:       agg.timestamp,
-			DeltaInput:      agg.input,
-			DeltaOutput:     agg.output,
-			DeltaCacheRead:  agg.cacheRead,
-			DeltaCacheWrite: agg.cacheWrite,
-			DeltaCost:       cost.TotalCost,
+			ID:                sid,
+			Project:           project,
+			Slug:              agg.slug,
+			Model:             agg.model,
+			Timestamp:         agg.timestamp,
+			DeltaInput:        agg.input,
+			DeltaOutput:       agg.output,
+			DeltaCacheRead:    agg.cacheRead,
+			DeltaCacheWrite5m: agg.cacheWrite5m,
+			DeltaCacheWrite1h: agg.cacheWrite1h,
+			DeltaCost:         cost.TotalCost,
 		}
 
 		if err := p.store.UpsertSession(delta); err != nil {
