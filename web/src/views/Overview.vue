@@ -23,8 +23,8 @@
       />
       <StatCard
         :label="todayLabel"
-        :value="store.summary.today.cost"
-        :tokens="store.summary.today.tokens"
+        :value="store.summary.today?.cost ?? 0"
+        :tokens="store.summary.today?.tokens ?? 0"
         :trendPct="dayTrend"
         :prevName="yesterdayLabel"
         :prevAmount="store.summary.trends?.prev_day_cost"
@@ -39,8 +39,8 @@
       />
       <StatCard
         :label="monthLabel"
-        :value="store.summary.month.cost"
-        :tokens="store.summary.month.tokens"
+        :value="store.summary.month?.cost ?? 0"
+        :tokens="store.summary.month?.tokens ?? 0"
         :budget="store.summary.budget"
         :trendPct="monthTrend"
         :prevName="prevMonthName"
@@ -48,9 +48,10 @@
       />
     </div>
 
-    <div class="charts-row" v-if="store.summary">
+    <div class="charts-row" :class="{ 'charts-row-single': !store.summary }">
       <DailySpendChart />
       <StatCard
+        v-if="store.summary"
         class="projected-slot"
         label="Projected"
         :value="store.summary.projected"
@@ -222,7 +223,7 @@ const window5hTrend = computed(() => {
 
 const dayTrend = computed(() => {
   if (!store.summary?.trends) return null
-  return trendPct(store.summary.today.cost, store.summary.trends.prev_day_cost)
+  return trendPct(store.summary.today?.cost ?? 0, store.summary.trends.prev_day_cost)
 })
 
 const window7dTrend = computed(() => {
@@ -233,7 +234,7 @@ const window7dTrend = computed(() => {
 
 const monthTrend = computed(() => {
   if (!store.summary?.trends) return null
-  return trendPct(store.summary.month.cost, store.summary.trends.prev_month_cost)
+  return trendPct(store.summary.month?.cost ?? 0, store.summary.trends.prev_month_cost)
 })
 
 // Previous calendar month's full name (e.g. "April"). Setting day=1 first
@@ -320,6 +321,9 @@ async function loadHeatmap() {
 }
 
 onMounted(() => {
+  // Always ensure summary is present — websocket may arrive late or load()
+  // may have skipped summary when a sibling endpoint failed.
+  if (!store.summary) store.refreshSummary().catch(() => {})
   if (!store.loaded) store.load()
   // Reset any date filter the user may have set on the Sessions tab — the
   // Overview preview is a global "what have I been working on" view, not a
@@ -364,6 +368,9 @@ onMounted(() => {
   gap: var(--space-5);
   margin-bottom: var(--space-8);
   align-items: stretch;
+}
+.charts-row-single {
+  grid-template-columns: 1fr;
 }
 /* The Projected card sits in the right slot of charts-row where the donut
    used to live. Stretching its background to match DailySpendChart's height

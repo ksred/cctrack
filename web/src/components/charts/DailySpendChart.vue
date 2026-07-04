@@ -11,6 +11,7 @@
     </div>
     <div class="chart-canvas-wrap">
       <Bar v-if="chartData" :data="chartData" :options="chartOptions" />
+      <div v-else class="chart-empty">{{ loadError || 'No spend in this range' }}</div>
     </div>
   </div>
 </template>
@@ -45,13 +46,20 @@ const windowOptions = [
 
 const windowDays = ref(30)
 const data = ref<DailySpend[]>([])
+const loadError = ref('')
 
 const windowLabel = computed(
   () => windowOptions.find(o => o.days === windowDays.value)?.label ?? `${windowDays.value} Days`,
 )
 
 async function reload() {
-  data.value = (await fetchDaily(windowDays.value)) ?? []
+  loadError.value = ''
+  try {
+    data.value = (await fetchDaily(windowDays.value)) ?? []
+  } catch {
+    data.value = []
+    loadError.value = 'Failed to load daily spend'
+  }
 }
 
 onMounted(reload)
@@ -205,5 +213,14 @@ const chartOptions = {
 .chart-canvas-wrap {
   height: 180px;
   position: relative;
+}
+.chart-empty {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-disabled);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
 }
 </style>

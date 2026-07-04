@@ -12,14 +12,25 @@ export const useDashboardStore = defineStore('dashboard', () => {
   // Daily spend is owned by DailySpendChart itself so it can refetch when the
   // user changes the time-range dropdown without going through the store.
   async function load() {
-    const [s, recent, top] = await Promise.all([
-      fetchSummary(),
-      fetchRecent(10),
-      fetchSessions(5, 0, 'cost', 'desc'),
-    ])
-    summary.value = s
-    recentSessions.value = recent || []
-    topSessions.value = top.sessions || []
+    // Summary is fetched independently so a failure in recent/top sessions
+    // can't leave the dashboard meters blank — refreshSummary already follows
+    // this pattern; load() should too.
+    try {
+      summary.value = await fetchSummary()
+    } catch {
+      // Keep any websocket-provided summary if the REST call fails.
+    }
+    try {
+      recentSessions.value = (await fetchRecent(10)) || []
+    } catch {
+      recentSessions.value = []
+    }
+    try {
+      const top = await fetchSessions(5, 0, 'cost', 'desc')
+      topSessions.value = top.sessions || []
+    } catch {
+      topSessions.value = []
+    }
     loaded.value = true
   }
 
@@ -36,10 +47,19 @@ export const useDashboardStore = defineStore('dashboard', () => {
     switch (event.type) {
       case 'summary.updated':
         if (event.payload) {
-          summary.value = {
-            ...summary.value,
-            ...event.payload,
-          } as Summary
+          const p = typeof event.payload === 'string'
+            ? JSON.parse(event.payload)
+            : event.payload
+          if (p && typeof p === 'object') {
+            summary.value = {
+              ...(summary.value ?? {}),
+              ...p,
+              window_5h: p.window_5h ?? summary.value?.window_5h,
+              window_7d: p.window_7d ?? summary.value?.window_7d,
+              today: p.today ?? summary.value?.today,
+              month: p.month ?? summary.value?.month,
+            } as Summary
+          }
         }
         break
 
