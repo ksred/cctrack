@@ -4,8 +4,8 @@ package calculator
 // a rate changes or a model is added — the dashboard surfaces them so users can
 // tell at a glance whether their build is on stale pricing.
 const (
-	RatesVersion = "v1.4"
-	RatesUpdated = "2026-06-05"
+	RatesVersion = "v1.6"
+	RatesUpdated = "2026-07-02"
 )
 
 type ModelRates struct {
@@ -22,6 +22,10 @@ type ModelRates struct {
 // first (e.g. "claude-opus-4-7" before "claude-opus-4-1" before "claude-opus-4").
 // Source: https://platform.claude.com/docs/en/about-claude/pricing
 var Rates = []ModelRates{
+	// Fable 5 / Mythos 5 — flagship Mythos-class tier, every rate exactly 2x Opus 4.8.
+	// Mythos 5 is limited-availability but priced identically to Fable 5.
+	{Family: "claude-fable-5", Released: "2026-06-09", InputPerMToken: 10.00, OutputPerMToken: 50.00, CacheReadPerMToken: 1.00, CacheWrite5mPerMToken: 12.50, CacheWrite1hPerMToken: 20.00},
+	{Family: "claude-mythos-5", Released: "2026-06-09", InputPerMToken: 10.00, OutputPerMToken: 50.00, CacheReadPerMToken: 1.00, CacheWrite5mPerMToken: 12.50, CacheWrite1hPerMToken: 20.00},
 	// Opus 4.5 / 4.6 / 4.7 / 4.8 — current tier (3x cheaper than the original Opus 4 / 4.1).
 	{Family: "claude-opus-4-8", Released: "2026-05-28", InputPerMToken: 5.00, OutputPerMToken: 25.00, CacheReadPerMToken: 0.50, CacheWrite5mPerMToken: 6.25, CacheWrite1hPerMToken: 10.00},
 	{Family: "claude-opus-4-7", Released: "2026-04-16", InputPerMToken: 5.00, OutputPerMToken: 25.00, CacheReadPerMToken: 0.50, CacheWrite5mPerMToken: 6.25, CacheWrite1hPerMToken: 10.00},
@@ -30,6 +34,9 @@ var Rates = []ModelRates{
 	// Opus 4 / 4.1 — original tier.
 	{Family: "claude-opus-4-1", Released: "2025-08-05", InputPerMToken: 15.00, OutputPerMToken: 75.00, CacheReadPerMToken: 1.50, CacheWrite5mPerMToken: 18.75, CacheWrite1hPerMToken: 30.00},
 	{Family: "claude-opus-4", Released: "2025-05-22", InputPerMToken: 15.00, OutputPerMToken: 75.00, CacheReadPerMToken: 1.50, CacheWrite5mPerMToken: 18.75, CacheWrite1hPerMToken: 30.00},
+	// Sonnet 5 — introductory pricing through 2026-08-31; standard from 2026-09-01
+	// matches Sonnet 4.6 ($3 / $15 input/output, $0.30 cache read, etc.).
+	{Family: "claude-sonnet-5", Released: "2026-06-30", InputPerMToken: 2.00, OutputPerMToken: 10.00, CacheReadPerMToken: 0.20, CacheWrite5mPerMToken: 2.50, CacheWrite1hPerMToken: 4.00},
 	// Sonnet 4 / 4.5 / 4.6 — same pricing across the family today, but listed
 	// explicitly so a future per-version repricing is a one-line change rather
 	// than a silent misattribution under the blanket prefix.
