@@ -1,3 +1,7 @@
+```
+cd web && bun run build && cd .. && go build -o cctrack . && ./cctrack serve
+```
+
 # cctrack
 
 A cost tracker for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Parses your local JSONL logs, calculates spend per session/project/model, and serves a real-time dashboard — all from a single binary.
