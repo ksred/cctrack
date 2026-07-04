@@ -89,6 +89,21 @@ var serveCmd = &cobra.Command{
 			return nil
 		}
 
+		// Coalesce broadcast-triggering events instead of rebuilding the
+		// summary inline: with several live Claude Code sessions appending
+		// JSONL, watcher flushes can arrive faster than a summary rebuild
+		// completes, and unbounded inline rebuilds starve the API of CPU
+		// (30s+ /api/v1/summary latency). A capacity-1 dirty flag plus a
+		// paced drain loop bounds rebuilds to ~1/s while the trailing mark
+		// guarantees the final state is always broadcast.
+		summaryDirty := make(chan struct{}, 1)
+		markSummaryDirty := func() {
+			select {
+			case summaryDirty <- struct{}{}:
+			default:
+			}
+		}
+
 		// Start watcher
 		w, err := watcher.New(cfg.LogDir, 250*time.Millisecond, func(paths []string) {
 			affected, err := p.ParseFiles(paths)
@@ -105,11 +120,10 @@ var serveCmd = &cobra.Command{
 						h.Broadcast("session.updated", payload)
 					}
 				}
-				// Broadcast summary update via the single augmentation
-				// chokepoint so honest-state fields are present.
-				if err := broadcastSummary(); err != nil {
-					log.Printf("watcher broadcast: %v", err)
-				}
+				// Mark the summary dirty; the drain loop broadcasts via the
+				// single augmentation chokepoint so honest-state fields are
+				// present.
+				markSummaryDirty()
 			}
 		})
 		if err != nil {
@@ -148,14 +162,36 @@ var serveCmd = &cobra.Command{
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
 
+		// Drain loop for coalesced summary broadcasts. Paced at ~1/s: after
+		// each rebuild it sleeps before checking the dirty flag again, so a
+		// burst of watcher flushes costs one rebuild, not one per flush.
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-summaryDirty:
+					if err := broadcastSummary(); err != nil {
+						log.Printf("summary broadcast: %v", err)
+					}
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(time.Second):
+					}
+				}
+			}
+		}()
+
 		// Auto-sync scheduler runtime wiring (F2 S2.2 + S2.3):
 		// the OnAnchorsUpdated callback broadcasts a fresh augmented
 		// summary through the websocket hub when the scheduler writes
 		// at least one anchor (per EM ruling chat msg 20591/20593).
-		// Routes through the same single broadcastSummary chokepoint
-		// the watcher uses, so honest-state fields are present.
+		// Routes through the same coalesced chokepoint the watcher uses,
+		// so honest-state fields are present.
 		schedOnUpdate := func(_ context.Context) error {
-			return broadcastSummary()
+			markSummaryDirty()
+			return nil
 		}
 		sched.WithOnAnchorsUpdated(schedOnUpdate)
 		schedDone := make(chan struct{})

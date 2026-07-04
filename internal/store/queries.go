@@ -81,8 +81,10 @@ type DailySpend struct {
 // the data-source-scope gap that the cascading inference can't bridge.
 func (s *Store) GetSummary() (*Summary, error) {
 	now := time.Now()
-	todayStr := now.Format("2006-01-02")
-	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	todayUTC := todayStart.UTC().Format(time.RFC3339Nano)
+	monthUTC := monthStart.UTC().Format(time.RFC3339Nano)
 
 	summary := &Summary{}
 
@@ -101,13 +103,15 @@ func (s *Store) GetSummary() (*Summary, error) {
 	// Aggregate from requests, not sessions: a session is a temporal *range*
 	// with a single last_activity point; bucketing total_cost by that point
 	// dumps the entire session's cost into one calendar day. Per-request
-	// timestamps attribute cost to the day it was actually incurred. The
-	// 'localtime' modifier converts UTC ISO timestamps to the host's local
-	// zone so "today" / "this month" buckets reflect the user's calendar.
+	// timestamps attribute cost to the day it was actually incurred.
+	// "Today" / "this month" start at LOCAL midnight, converted to a UTC
+	// bound in Go rather than via DATE(timestamp, 'localtime') in SQL: a
+	// plain lexicographic comparison on the stored UTC strings lets SQLite
+	// range-scan idx_requests_timestamp instead of converting every row.
 	err = s.db.QueryRow(`
 		SELECT COALESCE(SUM(cost), 0),
 		       COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_5m_tokens + cache_write_1h_tokens), 0)
-		FROM requests WHERE DATE(timestamp, 'localtime') >= ?`, todayStr).Scan(&summary.Today.Cost, &summary.Today.Tokens)
+		FROM requests WHERE timestamp >= ?`, todayUTC).Scan(&summary.Today.Cost, &summary.Today.Tokens)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +119,7 @@ func (s *Store) GetSummary() (*Summary, error) {
 	err = s.db.QueryRow(`
 		SELECT COALESCE(SUM(cost), 0),
 		       COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_5m_tokens + cache_write_1h_tokens), 0)
-		FROM requests WHERE DATE(timestamp, 'localtime') >= ?`, monthStart).Scan(&summary.Month.Cost, &summary.Month.Tokens)
+		FROM requests WHERE timestamp >= ?`, monthUTC).Scan(&summary.Month.Cost, &summary.Month.Tokens)
 	if err != nil {
 		return nil, err
 	}
@@ -309,40 +313,30 @@ func (s *Store) GetWindowBucket(duration time.Duration) (WindowBucket, error) {
 }
 
 func (s *Store) GetDailySummary(days int) ([]DailySpend, error) {
-	since := time.Now().AddDate(0, 0, -days).Format("2006-01-02")
+	now := time.Now()
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 
 	// Aggregate from requests, not sessions: a session has a single
 	// last_activity timestamp, so summing sessions.total_cost grouped by
 	// last_activity dumps every day of a multi-day session into the day it
 	// last saw a request. Per-request timestamps attribute cost to the day
 	// it was actually incurred.
-	rows, err := s.db.Query(`
-		SELECT DATE(timestamp, 'localtime') as day, SUM(cost)
-		FROM requests
-		WHERE DATE(timestamp, 'localtime') >= ?
-		GROUP BY day
-		ORDER BY day ASC`, since)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	// Build a complete date range with zero-filled gaps
-	result := make(map[string]float64)
-	for rows.Next() {
-		var day string
-		var cost float64
-		if err := rows.Scan(&day, &cost); err != nil {
-			return nil, err
-		}
-		result[day] = cost
-	}
-
+	//
+	// Buckets are one CostInRange per local day (local midnight bounds
+	// computed in Go, so DST-length days stay correct) rather than a single
+	// GROUP BY DATE(timestamp, 'localtime'): each range SUM rides
+	// idx_requests_timestamp, where the GROUP BY ran a per-row timezone
+	// conversion over every request in the window. Zero-cost days come out
+	// naturally as zero-sum ranges.
 	var daily []DailySpend
 	for i := days; i >= 0; i-- {
-		d := time.Now().AddDate(0, 0, -i).Format("2006-01-02")
-		cost := result[d]
-		daily = append(daily, DailySpend{Date: d, Cost: cost})
+		dayStart := todayStart.AddDate(0, 0, -i)
+		dayEnd := dayStart.AddDate(0, 0, 1)
+		cost, err := s.CostInRange(dayStart, dayEnd)
+		if err != nil {
+			return nil, err
+		}
+		daily = append(daily, DailySpend{Date: dayStart.Format("2006-01-02"), Cost: cost})
 	}
 	return daily, nil
 }
@@ -760,30 +754,31 @@ type Trends struct {
 
 func (s *Store) GetTrends() (*Trends, error) {
 	now := time.Now()
-	todayStr := now.Format("2006-01-02")
-	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	yesterdayStart := todayStart.AddDate(0, 0, -1)
 
-	prevMonthStart := time.Date(now.Year(), now.Month()-1, 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
-	prevMonthEnd := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
+	prevMonthStart := time.Date(now.Year(), now.Month()-1, 1, 0, 0, 0, 0, now.Location())
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 
 	t := &Trends{}
 
 	// Previous day cost (yesterday) — sums per-request cost so multi-day
-	// sessions don't spill across day boundaries. Local-day buckets so
-	// "yesterday" matches the user's calendar regardless of where UTC
-	// midnight falls.
+	// sessions don't spill across day boundaries. Buckets are local-calendar
+	// days expressed as UTC bounds in Go (not DATE(timestamp, 'localtime')
+	// in SQL) so the comparison range-scans idx_requests_timestamp instead
+	// of converting every row.
 	s.db.QueryRow(`
 		SELECT COALESCE(SUM(cost), 0)
-		FROM requests WHERE DATE(timestamp, 'localtime') >= ?
-			AND DATE(timestamp, 'localtime') < ?`,
-		yesterday, todayStr).Scan(&t.PrevDayCost)
+		FROM requests WHERE timestamp >= ? AND timestamp < ?`,
+		yesterdayStart.UTC().Format(time.RFC3339Nano),
+		todayStart.UTC().Format(time.RFC3339Nano)).Scan(&t.PrevDayCost)
 
 	// Previous month cost — same per-request aggregation.
 	s.db.QueryRow(`
 		SELECT COALESCE(SUM(cost), 0)
-		FROM requests WHERE DATE(timestamp, 'localtime') >= ?
-			AND DATE(timestamp, 'localtime') < ?`,
-		prevMonthStart, prevMonthEnd).Scan(&t.PrevMonthCost)
+		FROM requests WHERE timestamp >= ? AND timestamp < ?`,
+		prevMonthStart.UTC().Format(time.RFC3339Nano),
+		monthStart.UTC().Format(time.RFC3339Nano)).Scan(&t.PrevMonthCost)
 
 	return t, nil
 }

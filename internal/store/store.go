@@ -111,6 +111,7 @@ func (s *Store) migrate() error {
 		CREATE INDEX IF NOT EXISTS idx_sessions_total_cost ON sessions(total_cost);
 		CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
 		CREATE INDEX IF NOT EXISTS idx_requests_session_id ON requests(session_id);
+		CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp);
 	`)
 	return err
 }
