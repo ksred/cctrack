@@ -3,6 +3,11 @@ export function formatCostDisplay(value: number): string {
   return '$' + value.toFixed(2)
 }
 
+/** Whole-dollar display for larger aggregates (7d, monthly, projected, etc.). */
+export function formatCostWhole(value: number): string {
+  return '$' + Math.round(value).toLocaleString('en-US')
+}
+
 export function formatCostPrecise(value: number): string {
   return '$' + value.toFixed(4)
 }

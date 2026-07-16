@@ -9,7 +9,7 @@
     <div v-if="trendPct !== undefined && trendPct !== null" class="stat-trend" :class="trendClass">
       <span class="trend-arrow">{{ trendPct > 0 ? '↑' : trendPct < 0 ? '↓' : '→' }}</span>
       <span>
-        {{ Math.abs(trendPct) }}% vs {{ prevName || trendLabel }}<template v-if="prevAmount !== undefined"> · {{ formatCostDisplay(prevAmount) }}</template>
+        {{ Math.abs(trendPct) }}% vs {{ prevName || trendLabel }}<template v-if="prevAmount !== undefined"> · {{ formatPrev(prevAmount) }}</template>
       </span>
     </div>
     <div v-if="budget && budget > 0" class="budget-bar-wrap">
@@ -21,7 +21,7 @@
 <script setup lang="ts">
 import { computed, toRef } from 'vue'
 import { useCountUp } from '../../composables/useCountUp'
-import { formatTokens, formatCostDisplay } from '../../composables/useFormatCost'
+import { formatTokens, formatCostDisplay, formatCostWhole } from '../../composables/useFormatCost'
 
 const props = defineProps<{
   label: string
@@ -36,15 +36,25 @@ const props = defineProps<{
   // percentage so the user sees what they're being compared against.
   prevName?: string
   prevAmount?: number
+  /** Round to whole dollars (no cents) — for larger aggregates. */
+  whole?: boolean
 }>()
 
 const targetValue = toRef(props, 'value')
 const animated = useCountUp(targetValue)
 
+function formatPrev(amount: number): string {
+  return props.whole ? formatCostWhole(amount) : formatCostDisplay(amount)
+}
+
 const formattedValue = computed(() => {
   // Target value drives the format; useCountUp animates `animated.value`
   // through small intermediate numbers that we don't want to render as
   // $0.0000 for the entire animation when the target is 0.
+  if (props.whole) {
+    if (props.value === 0) return '$0'
+    return formatCostWhole(animated.value)
+  }
   if (props.value === 0) return '$0.00'
   const v = animated.value
   if (v < 0.01) return '$' + v.toFixed(4)

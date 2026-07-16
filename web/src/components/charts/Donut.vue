@@ -17,7 +17,7 @@
           <div class="legend-dot" :style="{ background: item.color }"></div>
           <span class="legend-label" :title="item.label">{{ item.label }}</span>
         </div>
-        <div class="legend-val">{{ formatCostDisplay(item.value) }} <span class="legend-pct">{{ item.pct }}%</span></div>
+        <div class="legend-val">{{ formatValue(item.value) }} <span class="legend-pct">{{ item.pct }}%</span></div>
       </div>
     </div>
   </div>
@@ -31,7 +31,7 @@ import {
   ArcElement,
   Tooltip,
 } from 'chart.js'
-import { formatCostDisplay } from '../../composables/useFormatCost'
+import { formatCostDisplay, formatCostWhole } from '../../composables/useFormatCost'
 
 ChartJS.register(ArcElement, Tooltip)
 
@@ -46,7 +46,13 @@ const props = defineProps<{
   subtitle?: string
   slices: DonutSlice[]
   emptyText?: string
+  /** Round legend/tooltip amounts to whole dollars. */
+  whole?: boolean
 }>()
+
+function formatValue(value: number): string {
+  return props.whole ? formatCostWhole(value) : formatCostDisplay(value)
+}
 
 const total = computed(() => props.slices.reduce((s, x) => s + x.value, 0))
 const hasData = computed(() => total.value > 0)
@@ -69,7 +75,7 @@ const chartData = computed(() => ({
   }],
 }))
 
-const chartOptions = {
+const chartOptions = computed(() => ({
   responsive: true,
   maintainAspectRatio: false,
   cutout: '72%',
@@ -89,12 +95,15 @@ const chartOptions = {
         label: (ctx: any) => {
           const t = ctx.dataset.data.reduce((a: number, b: number) => a + b, 0)
           const pct = t > 0 ? Math.round((ctx.parsed / t) * 100) : 0
-          return `  $${ctx.parsed.toFixed(2)} (${pct}%)`
+          const amount = props.whole
+            ? '$' + Math.round(ctx.parsed).toLocaleString('en-US')
+            : '$' + ctx.parsed.toFixed(2)
+          return `  ${amount} (${pct}%)`
         },
       },
     },
   },
-}
+}))
 </script>
 
 <style scoped>
