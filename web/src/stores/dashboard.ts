@@ -1,18 +1,17 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { Summary, Session, WsEvent } from '../types'
-import { fetchSummary, fetchRecent, fetchSessions } from '../api'
+import { fetchSummary, fetchRecent } from '../api'
 
 export const useDashboardStore = defineStore('dashboard', () => {
   const summary = ref<Summary | null>(null)
   const recentSessions = ref<Session[]>([])
-  const topSessions = ref<Session[]>([])
   const loaded = ref(false)
 
   // Daily spend is owned by DailySpendChart itself so it can refetch when the
   // user changes the time-range dropdown without going through the store.
   async function load() {
-    // Summary is fetched independently so a failure in recent/top sessions
+    // Summary is fetched independently so a failure in recent sessions
     // can't leave the dashboard meters blank — refreshSummary already follows
     // this pattern; load() should too.
     try {
@@ -25,12 +24,6 @@ export const useDashboardStore = defineStore('dashboard', () => {
     } catch {
       recentSessions.value = []
     }
-    try {
-      const top = await fetchSessions(5, 0, 'cost', 'desc')
-      topSessions.value = top.sessions || []
-    } catch {
-      topSessions.value = []
-    }
     loaded.value = true
   }
 
@@ -38,7 +31,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
   // button) that just need the bucket.state honest-state classification
   // to redraw after a backend status change. Narrower than load() so an
   // unrelated endpoint failure can't fail the refresh, and so we don't
-  // refetch recent/top sessions on every manual sync.
+  // refetch recent sessions on every manual sync.
   async function refreshSummary() {
     summary.value = await fetchSummary()
   }
@@ -65,15 +58,9 @@ export const useDashboardStore = defineStore('dashboard', () => {
 
       case 'session.updated':
         if (event.payload) {
-          // Update in recent sessions
           const rIdx = recentSessions.value.findIndex(s => s.id === event.payload.id)
           if (rIdx >= 0) {
             recentSessions.value[rIdx] = event.payload
-          }
-          // Update in top sessions
-          const tIdx = topSessions.value.findIndex(s => s.id === event.payload.id)
-          if (tIdx >= 0) {
-            topSessions.value[tIdx] = event.payload
           }
         }
         break
@@ -92,5 +79,5 @@ export const useDashboardStore = defineStore('dashboard', () => {
     }
   }
 
-  return { summary, recentSessions, topSessions, loaded, load, refreshSummary, applyEvent }
+  return { summary, recentSessions, loaded, load, refreshSummary, applyEvent }
 })

@@ -36,6 +36,7 @@
         :trendPct="window7dTrend"
         trendLabel="prev 7d"
         :prevAmount="store.summary.window_7d?.prev_cost"
+        whole
       />
       <StatCard
         :label="monthLabel"
@@ -45,6 +46,7 @@
         :trendPct="monthTrend"
         :prevName="prevMonthName"
         :prevAmount="store.summary.trends?.prev_month_cost"
+        whole
       />
     </div>
 
@@ -56,6 +58,7 @@
         label="Projected"
         :value="store.summary.projected"
         subtext="est. this month"
+        whole
       />
     </div>
 
@@ -78,6 +81,7 @@
         title="Spend by Project"
         :slices="projectSpendSlices"
         emptyText="No spend in this range"
+        whole
       >
         <template #header-action>
           <TimeRangeSelect v-model="projectsRange" />
@@ -90,12 +94,12 @@
       <ActivityHeatmap :cells="heatmap" />
     </div>
 
-    <div class="section-header" v-if="recentGroups.length">
+    <div class="section-header" v-if="recentFamilies.length">
       <div class="section-title">Recent Sessions</div>
       <router-link class="view-all" to="/sessions">View all →</router-link>
     </div>
 
-    <div class="sessions-table-wrap" v-if="recentGroups.length">
+    <div class="sessions-table-wrap" v-if="recentFamilies.length">
       <table>
         <thead>
           <tr>
@@ -108,55 +112,46 @@
           </tr>
         </thead>
         <tbody>
-          <template v-for="group in recentGroups" :key="group.project">
-            <ProjectGroupRow
-              :group="group"
-              :expanded="sessionsStore.expanded.has(group.project)"
-              @toggle="sessionsStore.toggleExpand"
-            />
-            <template v-if="sessionsStore.expanded.has(group.project)">
-              <tr v-if="sessionsStore.childLoading.has(group.project)" class="loading-row">
-                <td></td>
-                <td colspan="5">Loading sessions…</td>
-              </tr>
-              <SessionRow
-                v-for="(session, i) in (sessionsStore.childSessions.get(group.project) || [])"
-                :key="session.id"
-                :session="session"
-                :rank="i + 1"
-                show-started
-                subordinate
-                @select="openSession"
-              />
-            </template>
-          </template>
+          <ProjectTreeRows
+            :families="recentFamilies"
+            :expanded="sessionsStore.expanded"
+            :child-sessions="sessionsStore.childSessions"
+            :child-loading="sessionsStore.childLoading"
+            @toggle="sessionsStore.toggleExpand"
+            @select="openSession"
+          />
         </tbody>
       </table>
     </div>
 
-    <div class="section-header top-section" v-if="store.topSessions.length">
-      <div class="section-title">Most Expensive Sessions</div>
+    <div class="section-header top-section" v-if="topFamilies.length">
+      <div class="section-title">Most Expensive Projects</div>
     </div>
 
-    <div class="sessions-table-wrap" v-if="store.topSessions.length">
+    <div class="sessions-table-wrap" v-if="topFamilies.length">
       <table>
         <thead>
           <tr>
             <th style="width:40px">#</th>
-            <th>Session</th>
+            <th>Project</th>
             <th>Last Active</th>
             <th class="right">Tokens</th>
             <th class="right">Cost</th>
           </tr>
         </thead>
         <tbody>
-          <SessionRow
-            v-for="(session, i) in store.topSessions"
-            :key="session.id"
-            :session="session"
-            :rank="i + 1"
-            @select="openSession"
-          />
+          <tr v-for="(family, i) in topFamilies" :key="family.id" class="project-rank-row">
+            <td class="rank" :class="{ top: i === 0 }">{{ i + 1 }}</td>
+            <td>
+              <div class="project-name">
+                {{ family.displayName }}
+                <span class="session-pill">{{ family.rollup.session_count }} {{ family.rollup.session_count === 1 ? 'session' : 'sessions' }}</span>
+              </div>
+            </td>
+            <td class="time-cell">{{ formatDate(family.rollup.last_activity) }}</td>
+            <td class="token-cell">{{ formatTokens(family.rollup.total_tokens) }}</td>
+            <td class="cost-cell" :class="{ top: i === 0 }">{{ formatCostDisplay(family.rollup.total_cost) }}</td>
+          </tr>
         </tbody>
       </table>
     </div>
@@ -177,21 +172,32 @@ import Donut from '../components/charts/Donut.vue'
 import ModelBreakdown from '../components/charts/ModelBreakdown.vue'
 import ActivityHeatmap from '../components/charts/ActivityHeatmap.vue'
 import WindowBars from '../components/charts/WindowBars.vue'
-import SessionRow from '../components/domain/SessionRow.vue'
-import ProjectGroupRow from '../components/domain/ProjectGroupRow.vue'
+import ProjectTreeRows from '../components/domain/ProjectTreeRows.vue'
 import SessionDetail from '../components/domain/SessionDetail.vue'
 import SlideOver from '../components/primitives/SlideOver.vue'
 import TimeRangeSelect, { type TimeRange } from '../components/primitives/TimeRangeSelect.vue'
 import type { Session, ModelSummary, HeatmapCell, ProjectMonthly, CostBreakdown } from '../types'
+import { nestProjectGroups, sortFamilies } from '../composables/useWorktreeNesting'
+import { formatCostDisplay, formatTokens, formatDate } from '../composables/useFormatCost'
 import { fetchSession, fetchModels, fetchHeatmap, fetchProjectsSpend, fetchCostBreakdown } from '../api'
 
 const store = useDashboardStore()
 const sessionsStore = useSessionsStore()
 const selectedSession = ref<Session | null>(null)
 
-// Top N most-recently-active projects for the Overview preview. The full
-// list lives at /sessions; here we just show enough to scan at a glance.
-const recentGroups = computed(() => sessionsStore.groups.slice(0, 8))
+// Top N families (main + worktrees rolled up). Worktrees travel with their parent.
+const recentFamilies = computed(() =>
+  sortFamilies(
+    nestProjectGroups(sessionsStore.groups),
+    sessionsStore.sortBy,
+    sessionsStore.sortDir,
+  ).slice(0, 8),
+)
+
+// All-time project families ranked by rolled-up cost (main + worktrees).
+const topFamilies = computed(() =>
+  sortFamilies(nestProjectGroups(sessionsStore.groups), 'cost', 'desc').slice(0, 8),
+)
 const models = ref<ModelSummary[]>([])
 const heatmap = ref<HeatmapCell[]>([])
 const projectSpend = ref<ProjectMonthly[]>([])
@@ -457,4 +463,62 @@ tr.loading-row td {
   color: var(--text-tertiary);
   font-size: 12px;
 }
+
+tr.project-rank-row {
+  border-bottom: 1px solid var(--border-subtle);
+}
+tr.project-rank-row:last-child { border-bottom: none; }
+tr.project-rank-row td {
+  padding: var(--space-4) var(--space-5);
+  color: var(--text-secondary);
+  vertical-align: middle;
+  font-size: 13px;
+}
+.rank {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-disabled);
+  width: 32px;
+  text-align: right;
+  padding-right: var(--space-2);
+}
+.rank.top { color: var(--amber-500); }
+.project-name {
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.session-pill {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--text-tertiary);
+  background: var(--bg-subtle);
+  padding: 2px 6px;
+  border: 1px solid var(--border-subtle);
+}
+.time-cell {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+.token-cell {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  text-align: right;
+}
+.cost-cell {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  text-align: right;
+}
+.cost-cell.top { color: var(--amber-400); }
 </style>
