@@ -2,17 +2,17 @@
   <div>
     <div class="page-header">
       <h1 class="page-title">Projects</h1>
-      <div class="page-meta">{{ projects.length }} projects</div>
+      <div class="page-meta">{{ families.length }} projects</div>
     </div>
 
     <!-- Cost by project bar chart -->
-    <div class="charts-row" v-if="projects.length">
+    <div class="charts-row" v-if="families.length">
       <div class="chart-card">
         <div class="chart-header">
           <div class="chart-title">Cost by Project</div>
           <div class="chart-meta">{{ formatCostDisplay(totalCost) }} total</div>
         </div>
-        <div class="chart-canvas-wrap tall">
+        <div class="chart-canvas-wrap bar-chart" :style="{ height: barChartHeight + 'px' }">
           <Bar v-if="projectBarData" :data="projectBarData" :options="projectBarOptions" />
         </div>
       </div>
@@ -25,24 +25,26 @@
           <Doughnut v-if="projectDonutData" :data="projectDonutData" :options="donutOptions" />
         </div>
         <div class="donut-legend">
-          <div v-for="(p, i) in topProjectsForLegend" :key="p.project" class="legend-row">
+          <div v-for="(f, i) in topFamiliesForLegend" :key="f.id" class="legend-row">
             <div class="legend-left">
               <div class="legend-dot" :style="{ background: projectColors[i] }"></div>
-              <span>{{ p.project }}</span>
+              <span>{{ f.displayName }}</span>
             </div>
-            <div class="legend-val">{{ formatCostDisplay(p.total_cost) }}</div>
+            <div class="legend-val">{{ formatCostDisplay(f.rollup.total_cost) }}</div>
           </div>
         </div>
       </div>
     </div>
 
     <!-- Monthly cost per project stacked bar -->
-    <div class="chart-card full-width" v-if="monthlyData.length">
+    <div class="chart-card full-width" v-if="monthlyData.length || monthlyLoading">
       <div class="chart-header">
         <div class="chart-title">Monthly Spend by Project</div>
+        <div v-if="monthlyLoading" class="chart-meta">Loading…</div>
       </div>
       <div class="chart-canvas-wrap tall">
         <Bar v-if="monthlyChartData" :data="monthlyChartData" :options="monthlyBarOptions" />
+        <div v-else-if="monthlyLoading" class="chart-placeholder">Aggregating monthly spend…</div>
       </div>
     </div>
 
@@ -51,7 +53,7 @@
       <div class="section-title">All Projects</div>
     </div>
 
-    <div class="sessions-table-wrap" v-if="projects.length">
+    <div class="sessions-table-wrap" v-if="families.length">
       <table>
         <thead>
           <tr>
@@ -64,14 +66,33 @@
           </tr>
         </thead>
         <tbody>
-          <tr v-for="(p, i) in projects" :key="p.project">
-            <td class="rank">{{ i + 1 }}</td>
-            <td class="project-name">{{ p.project }}</td>
-            <td class="mono right">{{ p.session_count }}</td>
-            <td class="mono right dim">{{ formatTokens(p.total_tokens) }}</td>
-            <td class="mono dim">{{ formatDate(p.last_activity) }}</td>
-            <td class="cost-cell" :class="{ top: i === 0 }">{{ formatCostDisplay(p.total_cost) }}</td>
-          </tr>
+          <template v-for="(family, i) in families" :key="family.id">
+            <tr class="family-row">
+              <td class="rank" :class="{ top: i === 0 }">{{ i + 1 }}</td>
+              <td>
+                <div class="family-name">
+                  {{ family.displayName }}
+                  <span v-if="family.members.length > 1" class="member-pill">{{ family.members.length }} trees</span>
+                </div>
+              </td>
+              <td class="mono right">{{ family.rollup.session_count }}</td>
+              <td class="mono right dim">{{ formatTokens(family.rollup.total_tokens) }}</td>
+              <td class="mono dim">{{ formatDate(family.rollup.last_activity) }}</td>
+              <td class="cost-cell" :class="{ top: i === 0 }">{{ formatCostDisplay(family.rollup.total_cost) }}</td>
+            </tr>
+            <tr
+              v-for="node in visibleMembers(family)"
+              :key="node.group.project"
+              class="member-row"
+            >
+              <td class="rank"></td>
+              <td class="member-name">{{ node.displayName }}</td>
+              <td class="mono right">{{ node.group.session_count }}</td>
+              <td class="mono right dim">{{ formatTokens(node.group.total_tokens) }}</td>
+              <td class="mono dim">{{ formatDate(node.group.last_activity) }}</td>
+              <td class="cost-cell dim-cost">{{ formatCostDisplay(node.group.total_cost) }}</td>
+            </tr>
+          </template>
         </tbody>
       </table>
     </div>
@@ -90,14 +111,21 @@ import {
   Tooltip,
   Legend,
 } from 'chart.js'
-import type { ProjectSummary, ProjectMonthly } from '../types'
+import type { ProjectSummary, ProjectMonthly, ProjectGroup } from '../types'
+import type { ProjectFamily } from '../composables/useWorktreeNesting'
 import { fetchProjects, fetchProjectMonthly } from '../api'
 import { formatCostDisplay, formatTokens, formatDate } from '../composables/useFormatCost'
+import {
+  nestProjectGroups,
+  sortFamilies,
+  familyLookup,
+} from '../composables/useWorktreeNesting'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, Tooltip, Legend)
 
 const projects = ref<ProjectSummary[]>([])
 const monthlyData = ref<ProjectMonthly[]>([])
+const monthlyLoading = ref(false)
 
 const projectColors = [
   '#f59e0b', '#fbbf24', '#fcd34d', '#d97706',
@@ -105,26 +133,58 @@ const projectColors = [
   '#a8a29e', '#6b7280', '#4b5563', '#374151',
 ]
 
-const totalCost = computed(() =>
-  projects.value.reduce((sum, p) => sum + p.total_cost, 0)
-)
-
-const topProjectsForLegend = computed(() =>
-  projects.value.slice(0, 8)
-)
-
-// Horizontal bar chart: cost by project
-const projectBarData = computed(() => {
-  if (!projects.value.length) return null
-  const top = projects.value.slice(0, 12)
+function toGroup(p: ProjectSummary): ProjectGroup {
   return {
-    labels: top.map(p => p.project),
+    project: p.project,
+    session_count: p.session_count,
+    total_cost: p.total_cost,
+    total_tokens: p.total_tokens,
+    started_at: '',
+    last_activity: p.last_activity,
+  }
+}
+
+const families = computed(() =>
+  sortFamilies(nestProjectGroups(projects.value.map(toGroup)), 'cost', 'desc'),
+)
+
+const byProjectFamily = computed(() => familyLookup(families.value))
+
+/** Multi-member families show main + worktrees; singles are header-only. */
+function visibleMembers(family: ProjectFamily) {
+  return family.members.length > 1 ? family.members : []
+}
+
+const totalCost = computed(() =>
+  families.value.reduce((sum, f) => sum + f.rollup.total_cost, 0),
+)
+
+const topFamiliesForLegend = computed(() => families.value.slice(0, 8))
+
+// Horizontal bar chart: cost by family
+const BAR_PROJECT_LIMIT = 20
+/** Vertical room per bar so labels stay ~11px-readable (not crushed into the canvas). */
+const BAR_ROW_PX = 22
+
+const barChartHeight = computed(() => {
+  const n = Math.min(families.value.length, BAR_PROJECT_LIMIT)
+  // Axis padding + per-row allotment; floor keeps short lists from looking sparse.
+  return Math.max(300, n * BAR_ROW_PX + 48)
+})
+
+const projectBarData = computed(() => {
+  if (!families.value.length) return null
+  const top = families.value.slice(0, BAR_PROJECT_LIMIT)
+  return {
+    labels: top.map(f => f.displayName),
     datasets: [{
-      data: top.map(p => p.total_cost),
+      data: top.map(f => f.rollup.total_cost),
       backgroundColor: top.map((_, i) => projectColors[i % projectColors.length]),
       borderColor: 'transparent',
       borderWidth: 0,
       borderRadius: 0,
+      barPercentage: 0.7,
+      categoryPercentage: 0.85,
     }],
   }
 })
@@ -134,6 +194,9 @@ const projectBarOptions = {
   maintainAspectRatio: false,
   indexAxis: 'y' as const,
   animation: { duration: 700, easing: 'easeOutQuart' as const },
+  layout: {
+    padding: { top: 4, bottom: 4 },
+  },
   plugins: {
     legend: { display: false },
     tooltip: {
@@ -165,19 +228,20 @@ const projectBarOptions = {
       border: { color: '#1e1e1b' },
       ticks: {
         color: '#8c8a84',
-        font: { family: 'DM Sans', size: 12 },
+        font: { family: 'DM Sans', size: 11 },
+        autoSkip: false,
       },
     },
   },
 }
 
-// Donut chart: share of total spend
+// Donut chart: share of total spend by family
 const projectDonutData = computed(() => {
-  if (!projects.value.length) return null
-  const top = projects.value.slice(0, 8)
-  const otherCost = projects.value.slice(8).reduce((s, p) => s + p.total_cost, 0)
-  const labels = top.map(p => p.project)
-  const data = top.map(p => p.total_cost)
+  if (!families.value.length) return null
+  const top = families.value.slice(0, 8)
+  const otherCost = families.value.slice(8).reduce((s, f) => s + f.rollup.total_cost, 0)
+  const labels = top.map(f => f.displayName)
+  const data = top.map(f => f.rollup.total_cost)
   if (otherCost > 0) {
     labels.push('Other')
     data.push(otherCost)
@@ -219,35 +283,49 @@ const donutOptions = {
   },
 }
 
-// Monthly stacked bar chart
+// Monthly stacked bar — costs rolled up to family display names
 const monthlyChartData = computed(() => {
-  if (!monthlyData.value.length) return null
+  if (!monthlyData.value.length || !families.value.length) return null
 
-  // Get unique months and top projects
   const months = [...new Set(monthlyData.value.map(d => d.month))].sort()
-  const topProjects = projects.value.slice(0, 6).map(p => p.project)
+  const topFamilies = families.value.slice(0, 6)
+  const topIds = new Set(topFamilies.map(f => f.id))
+  const lookup = byProjectFamily.value
 
-  const datasets = topProjects.map((project, i) => ({
-    label: project,
-    data: months.map(month => {
-      const entry = monthlyData.value.find(d => d.project === project && d.month === month)
-      return entry ? entry.cost : 0
-    }),
+  // Aggregate raw monthly rows into family-month costs
+  const familyMonthCost = new Map<string, number>()
+  for (const d of monthlyData.value) {
+    const family = lookup.get(d.project)
+    const key = family
+      ? `${family.id}\0${d.month}`
+      : `orphan:${d.project}\0${d.month}`
+    familyMonthCost.set(key, (familyMonthCost.get(key) || 0) + d.cost)
+  }
+
+  const datasets = topFamilies.map((family, i) => ({
+    label: family.displayName,
+    data: months.map(month => familyMonthCost.get(`${family.id}\0${month}`) || 0),
     backgroundColor: projectColors[i % projectColors.length],
     borderColor: 'transparent',
     borderWidth: 0,
   }))
 
-  // Add "Other" dataset
-  const otherProjects = new Set(projects.value.slice(6).map(p => p.project))
-  if (otherProjects.size > 0) {
+  // "Other" = families outside the top 6 (plus any orphan rows)
+  const hasOther = families.value.length > 6 ||
+    monthlyData.value.some(d => !lookup.has(d.project))
+  if (hasOther) {
     datasets.push({
       label: 'Other',
-      data: months.map(month =>
-        monthlyData.value
-          .filter(d => d.month === month && otherProjects.has(d.project))
-          .reduce((s, d) => s + d.cost, 0)
-      ),
+      data: months.map(month => {
+        let sum = 0
+        for (const [key, cost] of familyMonthCost) {
+          const [fid, m] = key.split('\0')
+          if (m !== month) continue
+          if (topIds.has(fid)) continue
+          sum += cost
+        }
+        return sum
+      }),
       backgroundColor: '#292524',
       borderColor: 'transparent',
       borderWidth: 0,
@@ -317,9 +395,16 @@ const monthlyBarOptions = {
 }
 
 onMounted(async () => {
-  const [p, m] = await Promise.all([fetchProjects(), fetchProjectMonthly()])
-  projects.value = p || []
-  monthlyData.value = m || []
+  // Table + bar/donut only need the cheap sessions rollup — paint those
+  // first. Monthly spend walks the requests table (heavier) and fills in
+  // after so the page doesn't sit blank waiting on it.
+  projects.value = (await fetchProjects()) || []
+  monthlyLoading.value = true
+  try {
+    monthlyData.value = (await fetchProjectMonthly()) || []
+  } finally {
+    monthlyLoading.value = false
+  }
 })
 </script>
 
@@ -388,6 +473,19 @@ onMounted(async () => {
 .chart-canvas-wrap.tall {
   height: 260px;
 }
+.chart-canvas-wrap.bar-chart {
+  /* Height set inline from barChartHeight so row count keeps labels readable. */
+  min-height: 300px;
+}
+.chart-placeholder {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-disabled);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+}
 
 .donut-legend {
   display: flex;
@@ -400,12 +498,21 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   font-size: 12px;
+  gap: var(--space-3);
 }
 .legend-left {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   color: var(--text-secondary);
+  min-width: 0;
+}
+.legend-left span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  letter-spacing: 0.04em;
 }
 .legend-dot {
   width: 6px;
@@ -417,6 +524,7 @@ onMounted(async () => {
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
   color: var(--text-tertiary);
+  flex-shrink: 0;
 }
 
 .section-header {
@@ -477,11 +585,42 @@ td.right { text-align: right; }
   text-align: right;
   padding-right: var(--space-2);
 }
-tbody tr:first-child .rank { color: var(--amber-500); }
-.project-name {
-  color: var(--text-primary);
-  font-weight: 400;
+.rank.top { color: var(--amber-500); }
+
+tr.family-row {
+  background: rgba(245, 158, 11, 0.03);
+  border-bottom-color: var(--border-default);
 }
+.family-name {
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.member-pill {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--text-tertiary);
+  background: var(--bg-subtle);
+  padding: 2px 6px;
+  border: 1px solid var(--border-subtle);
+}
+
+tr.member-row {
+  background: rgba(255, 255, 255, 0.012);
+}
+.member-name {
+  padding-left: calc(var(--space-5) + 18px);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
 .mono {
   font-family: 'JetBrains Mono', monospace;
   font-size: 12px;
@@ -495,4 +634,8 @@ tbody tr:first-child .rank { color: var(--amber-500); }
   text-align: right;
 }
 .cost-cell.top { color: var(--amber-400); }
+.cost-cell.dim-cost {
+  color: var(--text-secondary);
+  font-weight: 400;
+}
 </style>
