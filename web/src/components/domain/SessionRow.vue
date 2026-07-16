@@ -1,5 +1,9 @@
 <template>
-  <tr :class="{ 'active-session': isActive, 'subordinate-row': subordinate }" @click="$emit('select', session.id)">
+  <tr
+    :class="{ 'active-session': isActive, 'subordinate-row': subordinate }"
+    :style="subordinatePad"
+    @click="$emit('select', session.id)"
+  >
     <td class="rank">{{ rank }}</td>
     <td>
       <div class="session-name">
@@ -26,6 +30,8 @@ const props = defineProps<{
   isActive?: boolean
   showStarted?: boolean
   subordinate?: boolean
+  /** Parent project nesting depth — extra indent for sessions under worktrees. */
+  depth?: number
 }>()
 
 defineEmits<{ select: [id: string] }>()
@@ -39,6 +45,13 @@ const displayName = computed(() => {
     return s.slug || s.id.slice(0, 8)
   }
   return s.project || s.slug || s.id.slice(0, 8)
+})
+
+const subordinatePad = computed(() => {
+  if (!props.subordinate) return undefined
+  const extra = (props.depth ?? 0) * 18
+  // space-10 (40px) is the base subordinate indent from CSS; add nesting on top.
+  return { '--session-indent': `${40 + extra}px` } as Record<string, string>
 })
 
 const totalTokens = computed(() =>
@@ -66,7 +79,7 @@ tr.subordinate-row {
   background: rgba(255, 255, 255, 0.012);
 }
 tr.subordinate-row td:nth-child(2) {
-  padding-left: var(--space-10);
+  padding-left: var(--session-indent, var(--space-10));
 }
 tr.subordinate-row .session-name {
   font-family: 'JetBrains Mono', monospace;

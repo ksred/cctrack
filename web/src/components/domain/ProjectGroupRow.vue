@@ -1,11 +1,15 @@
 <template>
-  <tr class="group-row" @click="$emit('toggle', group.project)">
+  <tr
+    class="group-row"
+    :class="{ 'nested-group': depth > 0 }"
+    @click="$emit('toggle', group.project)"
+  >
     <td class="chevron-cell">
       <span class="chevron" :class="{ open: expanded }">▸</span>
     </td>
     <td>
-      <div class="group-name">
-        {{ group.project || '(no project)' }}
+      <div class="group-name" :style="namePad">
+        {{ label }}
         <span class="session-pill">{{ group.session_count }} {{ group.session_count === 1 ? 'session' : 'sessions' }}</span>
       </div>
     </td>
@@ -17,15 +21,26 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { ProjectGroup } from '../../types'
 import { formatCostDisplay, formatTokens, formatDate } from '../../composables/useFormatCost'
 
-defineProps<{
+const props = defineProps<{
   group: ProjectGroup
   expanded: boolean
+  /** Override label (e.g. worktree suffix when nested). */
+  displayName?: string
+  /** Nesting depth under a parent project (0 = root). */
+  depth?: number
 }>()
 
 defineEmits<{ toggle: [project: string] }>()
+
+const depth = computed(() => props.depth ?? 0)
+const label = computed(() => props.displayName ?? (props.group.project || '(no project)'))
+const namePad = computed(() =>
+  depth.value > 0 ? { paddingLeft: `${depth.value * 18}px` } : undefined,
+)
 </script>
 
 <style scoped>
@@ -36,6 +51,15 @@ tr.group-row {
   user-select: none;
 }
 tr.group-row:hover { background: var(--bg-elevated); }
+tr.group-row.nested-group {
+  background: rgba(255, 255, 255, 0.012);
+}
+tr.group-row.nested-group .group-name {
+  color: var(--text-secondary);
+  font-weight: 400;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+}
 
 td {
   padding: var(--space-4) var(--space-5);

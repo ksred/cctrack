@@ -47,28 +47,14 @@
           </tr>
         </thead>
         <tbody>
-          <template v-for="group in store.groups" :key="group.project">
-            <ProjectGroupRow
-              :group="group"
-              :expanded="store.expanded.has(group.project)"
-              @toggle="store.toggleExpand"
-            />
-            <template v-if="store.expanded.has(group.project)">
-              <tr v-if="store.childLoading.has(group.project)" class="loading-row">
-                <td></td>
-                <td colspan="5">Loading sessions…</td>
-              </tr>
-              <SessionRow
-                v-for="(session, i) in (store.childSessions.get(group.project) || [])"
-                :key="session.id"
-                :session="session"
-                :rank="i + 1"
-                show-started
-                subordinate
-                @select="store.selectSession"
-              />
-            </template>
-          </template>
+          <ProjectTreeRows
+            :families="nestedFamilies"
+            :expanded="store.expanded"
+            :child-sessions="store.childSessions"
+            :child-loading="store.childLoading"
+            @toggle="store.toggleExpand"
+            @select="store.selectSession"
+          />
           <tr v-if="!store.loading && !store.error && !store.groups.length" class="empty-row">
             <td></td>
             <td colspan="5">No sessions{{ store.dateFilter ? ' on ' + dateFilterLabel : '' }}.</td>
@@ -87,14 +73,18 @@
 import { computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSessionsStore } from '../stores/sessions'
-import SessionRow from '../components/domain/SessionRow.vue'
-import ProjectGroupRow from '../components/domain/ProjectGroupRow.vue'
+import { nestProjectGroups, sortFamilies } from '../composables/useWorktreeNesting'
+import ProjectTreeRows from '../components/domain/ProjectTreeRows.vue'
 import SessionDetail from '../components/domain/SessionDetail.vue'
 import SlideOver from '../components/primitives/SlideOver.vue'
 
 const store = useSessionsStore()
 const route = useRoute()
 const router = useRouter()
+
+const nestedFamilies = computed(() =>
+  sortFamilies(nestProjectGroups(store.groups), store.sortBy, store.sortDir),
+)
 
 // URL query is the source of truth for the date filter so a bookmarked
 // /sessions?date=2026-05-03 reproduces the filtered view.
