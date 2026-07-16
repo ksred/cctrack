@@ -564,27 +564,49 @@ func (s *Store) GetProjectMonthly() ([]ProjectMonthly, error) {
 	// Join requests → sessions so cross-month sessions are split by request
 	// timestamp into the months they actually spanned, not lumped into the
 	// month of last_activity.
-	rows, err := s.db.Query(`
-		SELECT s.project,
-			STRFTIME('%Y-%m', r.timestamp, 'localtime') as month,
-			SUM(r.cost) as cost
-		FROM requests r
-		JOIN sessions s ON s.id = r.session_id
-		WHERE DATE(r.timestamp, 'localtime') >= DATE('now', '-6 months', 'localtime')
-		GROUP BY s.project, month
-		ORDER BY month ASC, cost DESC`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+	//
+	// One index-friendly range SUM per local calendar month (bounds computed
+	// in Go) rather than a single GROUP BY STRFTIME(..., 'localtime') over
+	// the whole window: the latter forces a per-row timezone conversion and
+	// can't use idx_requests_timestamp. On a ~200k-request DB that was ~60s
+	// vs ~0.5s for six monthly scans.
+	now := time.Now()
+	// Inclusive window: current local month plus the five preceding ones.
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	first := monthStart.AddDate(0, -5, 0)
 
 	var data []ProjectMonthly
-	for rows.Next() {
-		var pm ProjectMonthly
-		if err := rows.Scan(&pm.Project, &pm.Month, &pm.Cost); err != nil {
+	for m := first; !m.After(monthStart); m = m.AddDate(0, 1, 0) {
+		end := m.AddDate(0, 1, 0)
+		monthKey := m.Format("2006-01")
+		rows, err := s.db.Query(`
+			SELECT s.project, SUM(r.cost) as cost
+			FROM requests r
+			JOIN sessions s ON s.id = r.session_id
+			WHERE r.timestamp >= ? AND r.timestamp < ?
+			GROUP BY s.project
+			HAVING cost > 0
+			ORDER BY cost DESC`,
+			m.UTC().Format(time.RFC3339Nano),
+			end.UTC().Format(time.RFC3339Nano),
+		)
+		if err != nil {
 			return nil, err
 		}
-		data = append(data, pm)
+		for rows.Next() {
+			var pm ProjectMonthly
+			if err := rows.Scan(&pm.Project, &pm.Cost); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			pm.Month = monthKey
+			data = append(data, pm)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
 	}
 	return data, nil
 }
