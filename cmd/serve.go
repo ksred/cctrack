@@ -137,6 +137,8 @@ func openBrowser(url string) {
 	switch runtime.GOOS {
 	case "darwin":
 		cmd = exec.Command("open", url)
+	case "windows":
+		cmd = exec.Command("cmd", "/c", "start", "", url)
 	case "linux":
 		cmd = exec.Command("xdg-open", url)
 	default:

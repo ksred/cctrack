@@ -2,6 +2,15 @@
 
 A cost tracker for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Parses your local JSONL logs, calculates spend per session/project/model, and serves a real-time dashboard — all from a single binary.
 
+## Prerequisites
+
+- Go 1.22 or newer
+- Node.js 18+ and npm
+- Git
+- Claude Code log files in `~/.claude/projects/` or the directory configured in `~/.cctrack/config.json`
+- On Windows, use PowerShell or Windows Terminal for the commands below
+- If you install with `go install`, make sure your Go bin directory is on `PATH`
+
 ## Features
 
 - **Cost tracking** — today, this week, this month, and projected monthly spend
@@ -25,12 +34,29 @@ cd web && npm install && npm run build && cd ..
 go build -o cctrack .
 ```
 
+On Windows, build an `.exe` and run it from the current directory:
+
+```powershell
+git clone https://github.com/ksred/cctrack.git
+cd cctrack
+Set-Location web
+npm install
+npm run build
+Set-Location ..
+go build -o cctrack.exe .
+.\cctrack.exe serve
+```
+
 ### Go install
 
 ```bash
 # Requires the web/dist directory to be pre-built
 go install github.com/ksred/cctrack@latest
 ```
+
+On Windows, that installs `cctrack.exe` into the Go bin directory, usually `%USERPROFILE%\go\bin`. Add that directory to `PATH`, or invoke the binary with its full path.
+
+If you want the simplest Windows path, build once with `go build -o cctrack.exe .` and then run `.\cctrack.exe serve` from PowerShell.
 
 ## Usage
 
@@ -40,7 +66,8 @@ go install github.com/ksred/cctrack@latest
 cctrack serve
 ```
 
-Opens a web dashboard on `http://localhost:8877` with real-time cost tracking. Parses logs on startup and watches for new activity.
+Opens a web dashboard on `http://localhost:7432` with real-time cost tracking. Parses logs on startup and watches for new activity.
+On Windows, if `cctrack` is not on `PATH`, run `.\cctrack.exe serve` from the folder where you built it, or use the full path to the installed executable.
 
 ### Parse logs manually
 
@@ -81,7 +108,7 @@ Config is stored at `~/.config/cctrack/config.json`:
 {
   "log_dir": "~/.claude/projects",
   "db_path": "~/.config/cctrack/cctrack.db",
-  "port": 8877,
+  "port": 7432,
   "monthly_budget_usd": 200,
   "open_browser_on_serve": true
 }
